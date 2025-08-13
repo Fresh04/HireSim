@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext'; // optional
+import { useAuth } from '../context/AuthContext';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -15,7 +15,6 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // redirect already-logged-in users
   useEffect(() => {
     const token = auth?.token ?? localStorage.getItem('token');
     if (token) navigate('/dashboard', { replace: true });
@@ -36,19 +35,15 @@ export default function Register() {
         throw new Error('No token returned from server');
       }
 
-      // persist token and username
       localStorage.setItem('token', token);
       if (user && user.name) localStorage.setItem('username', user.name);
 
-      // set axios default header for subsequent requests
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
-      // notify AuthContext if available
       if (auth?.login) {
         try { auth.login(token, user); } catch (e) { /* ignore */ }
       }
 
-      // auto-redirect to dashboard after signup
       navigate('/dashboard');
     } catch (err) {
       console.error('Register error', err?.response?.data || err.message || err);

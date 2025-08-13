@@ -1,4 +1,3 @@
-// src/pages/Dashboard.jsx
 import React, { useState } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
@@ -10,9 +9,9 @@ export default function Dashboard() {
   const [description, setDescription] = useState('');
   const [requirements, setRequirements] = useState('');
   const [resumeFile, setResumeFile] = useState(null);
-  const [numQuestions, setNumQuestions] = useState(5); // new
-  const [difficulty, setDifficulty] = useState('medium'); // new: easy/medium/hard
-  const [mode, setMode] = useState('mock'); // mock / timed / assessment
+  const [numQuestions, setNumQuestions] = useState(5);
+  const [difficulty, setDifficulty] = useState('medium');
+  const [mode, setMode] = useState('mock'); 
   const navigate = useNavigate();
 
   const handleCreate = async (e) => {
@@ -38,7 +37,6 @@ export default function Dashboard() {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      // navigate to interview page with id + initial question
       navigate(`/interview/${data.interviewId}`, { state: { firstQuestion: data.firstQuestion } });
     } catch (err) {
       console.error('Error creating interview:', err.response?.data || err.message || err);

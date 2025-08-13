@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Link, useNavigate } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext'; // optional - if you don't have it, the code still works
+import { useAuth } from '../context/AuthContext';
 
 export default function Login() {
   const navigate = useNavigate();
@@ -13,7 +13,6 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // if already logged in, redirect to dashboard
   useEffect(() => {
     const token = auth?.token ?? localStorage.getItem('token');
     if (token) navigate('/dashboard', { replace: true });
@@ -25,22 +24,15 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await axios.post(`${import.meta.env.VITE_API_URL}/login`, { email, password });
-      // expected shape: { token, user? }
       const token = res.data?.token;
       const user = res.data?.user || null;
 
       if (!token) {
         throw new Error('No token returned from server');
       }
-
-      // persist token + username
       localStorage.setItem('token', token);
       if (user && user.name) localStorage.setItem('username', user.name);
-
-      // set axios default header for subsequent requests
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
-      // notify AuthContext if available
       if (auth?.login) {
         try { auth.login(token, user); } catch (e) { /* ignore */ }
       }

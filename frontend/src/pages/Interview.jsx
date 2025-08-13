@@ -9,7 +9,6 @@ export default function Interview() {
   const navigate = useNavigate();
   const navFirstQuestion = location.state?.firstQuestion || null;
 
-  // interview state
   const [interviewMeta, setInterviewMeta] = useState(null);
   const [currentQuestion, setCurrentQuestion] = useState(navFirstQuestion);
   const [history, setHistory] = useState([]);
@@ -21,23 +20,19 @@ export default function Interview() {
   const [stagedAnswer, setStagedAnswer] = useState('');
   const [done, setDone] = useState(false);
 
-  // media refs
   const videoRef = useRef(null);
   const mediaStreamRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const recordedChunksRef = useRef([]);
 
-  // speech recognition
   const recognitionRef = useRef(null);
   const supportsSTT = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 
-  // helper for auth header
   function getAuthHeaders() {
     const token = localStorage.getItem('token');
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
-  // Fetch interview; if already completed -> redirect to analysis
   useEffect(() => {
     let mounted = true;
     async function fetchInterview() {
@@ -49,18 +44,14 @@ export default function Interview() {
         const doc = res.data;
         setInterviewMeta(doc);
 
-        // if completed or questions completed redirect to analysis
         if (doc.status && doc.status !== 'in_progress') {
-          // go to analysis; replace to avoid back to interview
           navigate(`/analysis/${interviewId}`, { replace: true });
           return;
         }
 
-        // set history from context
         const ctx = Array.isArray(doc.context) ? doc.context.filter(c => c.role === 'assistant' || c.role === 'user') : [];
         setHistory(ctx.map(c => ({ role: c.role, text: c.content })));
 
-        // pick current question from saved questions + index, fallback to last assistant message
         if (Array.isArray(doc.questions) && typeof doc.currentQuestionIndex === 'number') {
           const q = doc.questions[doc.currentQuestionIndex] || null;
           setCurrentQuestion(q);
@@ -80,10 +71,8 @@ export default function Interview() {
     }
     fetchInterview();
     return () => { mounted = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [interviewId]);
 
-  // Setup SpeechRecognition (no media request)
   useEffect(() => {
     if (!supportsSTT) return;
     try {
@@ -129,7 +118,6 @@ export default function Interview() {
     };
   }, [supportsSTT]);
 
-  // TTS helper
   const speak = (text, onEnd) => {
     if (!text) { onEnd?.(); return; }
     if (!window.speechSynthesis) { onEnd?.(); return; }
@@ -139,7 +127,6 @@ export default function Interview() {
     speechSynthesis.speak(u);
   };
 
-  // Request media on-demand (only when starting interview)
   async function ensureMediaStream() {
     if (mediaStreamRef.current) return mediaStreamRef.current;
     try {
@@ -153,7 +140,6 @@ export default function Interview() {
     }
   }
 
-  // start recording
   async function startRecording() {
     try {
       const stream = await ensureMediaStream();
@@ -182,7 +168,6 @@ export default function Interview() {
     setIsRecording(false);
   }
 
-  // mic control (SpeechRecognition)
   const startListening = () => {
     if (!recognitionRef.current) { setStatusMsg('STT not available'); return; }
     try {
@@ -204,7 +189,6 @@ export default function Interview() {
     setStatusMsg('Mic stopped');
   };
 
-  // submit answer
   const submitAnswer = async (explicitText) => {
     if (isSubmitting) return;
     const answerText = (typeof explicitText === 'string' && explicitText.trim()) ? explicitText.trim() : stagedAnswer.trim();
@@ -234,7 +218,6 @@ export default function Interview() {
         });
       } else if (finished) {
         setDone(true);
-        // finalize - navigate replace so back doesn't go back into interview
         await finalizeInterview(true);
       } else {
         setStatusMsg('No next question returned');
@@ -278,7 +261,6 @@ export default function Interview() {
     speak(currentQuestion, () => { if (isListening) try { recognitionRef.current?.start(); } catch {} });
   };
 
-  // finalize upload: if replaceNav true do navigate replace (no back)
   const finalizeInterview = async (replaceNav = false) => {
     setStatusMsg('Finalizing interview — uploading media...');
     if (isRecording) stopRecording();
@@ -295,11 +277,9 @@ export default function Interview() {
       const headers = { ...(token ? { Authorization: `Bearer ${token}` } : {}), 'Content-Type': 'multipart/form-data' };
       await axios.post(`${import.meta.env.VITE_API_URL}/interviews/${interviewId}/complete`, form, { headers });
 
-      // notify sidebar refresh
       localStorage.setItem('hiresim_refresh', Date.now());
 
       setStatusMsg('Uploaded. Redirecting to analysis...');
-      // replace nav so back does not return to interview page
       if (replaceNav) navigate(`/analysis/${interviewId}`, { replace: true });
       else navigate(`/analysis/${interviewId}`);
     } catch (err) {
@@ -312,10 +292,8 @@ export default function Interview() {
     }
   };
 
-  // ensure cleanup of media on unmount
   useEffect(() => {
     return () => {
-      // stop media tracks
       if (mediaStreamRef.current) {
         mediaStreamRef.current.getTracks().forEach(t => t.stop());
         mediaStreamRef.current = null;
@@ -326,7 +304,6 @@ export default function Interview() {
     };
   }, []);
 
-  // keyboard shortcuts
   useEffect(() => {
     const onKey = (e) => {
       if (e.key === 'r' || e.key === 'R') handleRepeat();
@@ -341,11 +318,8 @@ export default function Interview() {
     return () => window.removeEventListener('keydown', onKey);
   }, [isListening, currentQuestion]);
 
-  // Start interview (request media, then record & speak question)
   const handleStartActions = async () => {
-    // request media and start recording only when user starts
     await startRecording();
-    // start STT if supported
     if (supportsSTT && !isListening) startListening();
     if (currentQuestion) {
       speak(currentQuestion, () => setStatusMsg('Waiting for your response...'));
@@ -359,7 +333,6 @@ export default function Interview() {
   return (
     <div className="min-h-screen bg-gray-100 p-6">
       <div className="max-w-6xl mx-auto grid grid-cols-3 gap-6">
-        {/* Main */}
         <div className="col-span-2 bg-white rounded shadow p-6">
           <div className="flex items-start justify-between">
             <div>
@@ -402,7 +375,6 @@ export default function Interview() {
             </div>
           </div>
 
-          {/* Staged answer */}
           <div className="mt-4">
             <div className="text-sm text-gray-500 mb-2">Answer (staged)</div>
             <div className="p-3 border rounded bg-white min-h-[80px]">
@@ -421,7 +393,6 @@ export default function Interview() {
             </div>
           </div>
 
-          {/* Transcript */}
           <div className="mt-6">
             <div className="text-sm text-gray-500 mb-2">Transcript</div>
             <div className="max-h-64 overflow-y-auto p-3 border rounded bg-gray-50">
@@ -435,7 +406,6 @@ export default function Interview() {
           </div>
         </div>
 
-        {/* Right column */}
         <div className="bg-white rounded shadow p-4 flex flex-col items-center">
           <video ref={videoRef} autoPlay muted playsInline className="w-full rounded bg-black" style={{ aspectRatio: '3/4', objectFit: 'cover' }} />
           <div className="w-full mt-3 flex gap-2">

@@ -1,4 +1,3 @@
-// src/pages/Analysis.jsx
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -8,13 +7,11 @@ function getAuthHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-/** Normalize a variety of possible score key names into our canonical keys */
 function normalizeScores(rawScores) {
   const empty = { communication: null, technical: null, structure: null, confidence: null, nonverbal: null };
   if (!rawScores || typeof rawScores !== 'object') return empty;
 
   const keys = Object.keys(rawScores);
-  // helper to find a value by matching key fragments case-insensitively
   const find = (...fragments) => {
     for (const k of keys) {
       const low = k.toLowerCase();
@@ -35,7 +32,6 @@ function normalizeScores(rawScores) {
     nonverbal: find('nonverbal', 'non-verbal', 'non verbal') ?? rawScores.nonverbal ?? null,
   };
 
-  // try to coerce numeric strings to integers; leave "N/A" etc as-is
   Object.entries(result).forEach(([k, v]) => {
     if (typeof v === 'string' && /^\d+$/.test(v.trim())) result[k] = parseInt(v.trim(), 10);
   });
@@ -88,13 +84,11 @@ export default function Analysis() {
         headers: getAuthHeaders()
       });
 
-      // refresh interview doc
       const res = await axios.get(`${import.meta.env.VITE_API_URL}/interviews/${id}`, {
         headers: getAuthHeaders()
       });
       setInterview(res.data);
 
-      // notify sidebar/other components to refresh
       localStorage.setItem('hiresim_refresh', Date.now());
     } catch (err) {
       console.error('Analysis failed:', err?.response?.data || err.message || err);
@@ -168,7 +162,6 @@ export default function Analysis() {
               <div className="text-sm text-gray-500">Overall</div>
               <div className="text-lg font-bold">
                 {
-                  // compute simple average if numeric values exist
                   (() => {
                     const vals = [normalized.communication, normalized.technical, normalized.structure, normalized.confidence]
                       .filter(v => typeof v === 'number');
@@ -214,7 +207,6 @@ export default function Analysis() {
               {running ? 'Re-running…' : 'Re-run Analysis'}
             </button>
             <button onClick={() => {
-              // show raw LLM output in a new tab for debugging
               const blob = new Blob([JSON.stringify(interview.analysisRaw || interview.analysis || {}, null, 2)], { type: 'application/json' });
               const url = URL.createObjectURL(blob);
               window.open(url, '_blank');
