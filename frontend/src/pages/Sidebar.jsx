@@ -14,7 +14,7 @@ export default function Sidebar() {
 
   async function load() {
     try {
-      const res = await axios.get(`${VITE_API_URL}/interviews`, {
+      const res = await axios.get(`${import.meta.env.VITE_API_URL}/interviews`, {
         headers: getAuthHeaders()
       });
       setItems(res.data || []);
