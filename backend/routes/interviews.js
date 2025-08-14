@@ -1,4 +1,3 @@
-// routes/interviews.js
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -9,12 +8,9 @@ const { Readable } = require('stream');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024 } // 200MB cap (adjust as needed)
+  limits: { fileSize: 200 * 1024 * 1024 } 
 });
 
-/** ---------------------
- * Helper: build system prompt
- * --------------------- */
 function buildSystemPrompt({ company, position, description, requirements, resumeText, numQuestions, difficulty, mode }) {
   return `
 You are an expert technical interviewer for the role of ${position} at ${company}.
@@ -27,25 +23,14 @@ Ask one question at a time, wait for the candidate's answer, and allow clarifica
 When ready to move on, ask the next question. If you decide the interview is complete, say "That concludes our interview."
 `.trim();
 }
-
-/** ---------------------
- * JSON extraction & robust parsing helpers (improved)
- * --------------------- */
-
-/**
- * Attempts to extract a JSON object from free text (various heuristics).
- * Returns parsed object or null.
- */
 function extractJsonSubstring(text) {
   if (!text) return null;
 
-  // 1) code fence JSON ```json ... ```
   const codeFenceJson = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (codeFenceJson && codeFenceJson[1]) {
     try { return JSON.parse(codeFenceJson[1].trim()); } catch (e) { /* continue */ }
   }
 
-  // 2) first {...} .. last } quick attempt
   const firstBrace = text.indexOf('{');
   const lastBrace = text.lastIndexOf('}');
   if (firstBrace >= 0 && lastBrace > firstBrace) {
@@ -53,7 +38,6 @@ function extractJsonSubstring(text) {
     try { return JSON.parse(cand); } catch (e) { /* continue */ }
   }
 
-  // 3) scan for balanced braces and attempt parse for each candidate
   let stack = [];
   for (let i = 0; i < text.length; i++) {
     if (text[i] === '{') stack.push(i);
@@ -69,28 +53,18 @@ function extractJsonSubstring(text) {
   return null;
 }
 
-/**
- * Attempt to repair truncated JSON candidate by removing trailing commas,
- * appending missing braces/brackets, and trying incremental cuts.
- */
 function tryRepairJson(candidate) {
   if (!candidate) return null;
   let work = candidate;
 
-  // strip markdown fences
   work = work.replace(/```(?:json)?/gi, '').replace(/```/g, '');
-
-  // remove trailing commas in objects/arrays
   work = work.replace(/,\s*}/g, '}').replace(/,\s*]/g, ']');
 
-  // trim leading non-brace text
   const first = work.indexOf('{');
   if (first > 0) work = work.slice(first);
 
-  // quick parse attempt
   try { return JSON.parse(work); } catch (e) { /* continue */ }
 
-  // count brackets and append closing ones if missing
   const openBrace = (work.match(/{/g) || []).length;
   const closeBrace = (work.match(/}/g) || []).length;
   const openBracket = (work.match(/\[/g) || []).length;
@@ -102,7 +76,6 @@ function tryRepairJson(candidate) {
   for (let i = 0; i < Math.min(addBraces, 6); i++) repaired += '}';
   for (let i = 0; i < Math.min(addBrackets, 6); i++) repaired += ']';
 
-  // remove odd control chars and try incremental truncation
   repaired = repaired.replace(/[\u0000-\u001F]+/g, '').trim();
 
   for (let extra = 0; extra <= 5; extra++) {
@@ -110,24 +83,19 @@ function tryRepairJson(candidate) {
       const candidateTry = repaired.slice(0, repaired.length - extra);
       return JSON.parse(candidateTry);
     } catch (e) {
-      // continue
+
     }
   }
 
   return null;
 }
 
-/**
- * Greedy regex-based extraction for common fields (scores, improvements, strengths).
- * Returns an object with { scores, improvements, strengths } (arrays/objects possibly empty).
- */
 function extractFieldsGreedy(text) {
   const scores = {};
   const improvements = [];
   const strengths = [];
 
   if (!text) return { scores, improvements, strengths };
-  // try to match key: value pairs that look like scores
   const scorePairs = text.match(/["']?([A-Za-z0-9 \/\(\)-]+?)["']?\s*:\s*("?(\d+|N\/A|N\/A)?"?)/g);
   if (scorePairs) {
     for (const pair of scorePairs) {
@@ -147,11 +115,9 @@ function extractFieldsGreedy(text) {
     }
   }
 
-  // helper to extract bullet/number lists after headings
   function extractListByKey(k) {
     const results = [];
 
-    // JSON-like array e.g., "improvements": ["a","b"]
     const reJsonArr = new RegExp(`"${k}"\\s*:\\s*\\[([\\s\\S]*?)\\]`, 'i');
     const m = text.match(reJsonArr);
     if (m && m[1]) {
@@ -160,7 +126,6 @@ function extractFieldsGreedy(text) {
       if (items.length) return items;
     }
 
-    // fallback: heading followed by lines
     const reHeading = new RegExp(`${k}\\s*[:\\-\\n]+([\\s\\S]{0,600})`, 'i');
     const h = text.match(reHeading);
     if (h && h[1]) {
@@ -180,7 +145,6 @@ function extractFieldsGreedy(text) {
   if (imps.length) improvements.push(...imps);
   if (snts.length) strengths.push(...snts);
 
-  // as a final fallback, look for a small block after "Improvements" or "Strengths"
   if (improvements.length === 0) {
     const alt = extractListByKey('Improvements');
     if (alt.length) improvements.push(...alt);
@@ -193,20 +157,10 @@ function extractFieldsGreedy(text) {
   return { scores, improvements, strengths };
 }
 
-/**
- * Attempts robust parsing of an analysis LLM reply.
- * - if JSON found -> return parsed
- * - else attempt repair of truncated JSON
- * - else try greedy regex extraction
- * - else call LLM (formatter prompts) to get strict JSON (1-2 attempts)
- * - final fallback returns safe structure and the raw text
- */
 async function robustParseAnalysis(llmText, callGroq) {
-  // 1) direct extraction
   const direct = extractJsonSubstring(llmText);
   if (direct) return { analysis: direct, raw: llmText };
 
-  // 2) try to repair truncated JSON
   const firstBrace = llmText.indexOf('{');
   if (firstBrace >= 0) {
     const candidate = llmText.slice(firstBrace);
@@ -214,7 +168,6 @@ async function robustParseAnalysis(llmText, callGroq) {
     if (repaired) return { analysis: repaired, raw: llmText };
   }
 
-  // 3) greedy extraction
   const greedy = extractFieldsGreedy(llmText);
   const anyGreedy = (greedy && (Object.keys(greedy.scores).length || greedy.improvements.length || greedy.strengths.length));
   if (anyGreedy) {
@@ -233,7 +186,6 @@ async function robustParseAnalysis(llmText, callGroq) {
     return { analysis: fallback, raw: llmText };
   }
 
-  // 4) ask LLM to reformat (attempt 1)
   const formatter1 = `
 The previous output may contain commentary or broken formatting. PLEASE RETURN A VALID JSON OBJECT ONLY with this schema:
 
@@ -256,7 +208,6 @@ Return the JSON only.
     if (parsed1) return { analysis: parsed1, raw: resp1 };
   } catch (e) { /* continue */ }
 
-  // 5) second formatter attempt (more explicit)
   const formatter2 = `
 You will ONLY output valid JSON (no markdown, no commentary). Extract these fields from the input or return null if not found:
 
@@ -279,7 +230,6 @@ Return only the JSON.
     if (parsed2) return { analysis: parsed2, raw: resp2 };
   } catch (e) { /* continue */ }
 
-  // 6) final fallback
   return {
     analysis: {
       scores: { communication: null, technical: null, structure: null, confidence: null, nonverbal: null },
@@ -291,9 +241,6 @@ Return only the JSON.
   };
 }
 
-/** ---------------------
- * Helper: parse numbered/bulleted question lists (fallback)
- * --------------------- */
 function parseQuestionsFromText(text) {
   if (!text) return [];
   text = text.replace(/```[\s\S]*?```/g, '').trim();
@@ -315,9 +262,6 @@ function parseQuestionsFromText(text) {
   return items;
 }
 
-/** ---------------------
- * Helper: call Groq (chat completions-compatible endpoint)
- * --------------------- */
 async function callGroq(messages) {
   const url = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
   const model = process.env.GROQ_MODEL;
@@ -344,14 +288,6 @@ async function callGroq(messages) {
   return assistantText;
 }
 
-/** ---------------------
- * Routes
- * --------------------- */
-
-/**
- * GET /interviews
- * List interviews for the authenticated user
- */
 router.get('/', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -367,15 +303,10 @@ router.get('/', async (req, res) => {
   }
 });
 
-/**
- * POST /interviews
- * Create interview: generate questions (JSON preferred), store questions array and firstQuestion
- */
 router.post('/', upload.single('resume'), async (req, res) => {
   try {
     const { company, position, description, requirements, numQuestions, difficulty, mode } = req.body;
 
-    // parse resume text if provided
     let resumeText = '';
     if (req.file && req.file.mimetype === 'application/pdf') {
       try {
@@ -406,7 +337,6 @@ Candidate background:
 ${resumeText || 'No resume provided'}
 `;
 
-    // call LLM and attempt to parse JSON questions
     const messages = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: qPrompt }
@@ -418,11 +348,9 @@ ${resumeText || 'No resume provided'}
     if (parsed && Array.isArray(parsed.questions)) {
       questions = parsed.questions.map(q => (typeof q === 'string' ? q.trim() : String(q)));
     } else {
-      // fallback: parse free-text lists
       questions = parseQuestionsFromText(qReply);
     }
 
-    // defensive fallback if still empty
     if (!questions || questions.length === 0) {
       questions = [
         'Explain a commonly used data structure and where you would use it.',
@@ -461,10 +389,6 @@ ${resumeText || 'No resume provided'}
   }
 });
 
-/**
- * POST /interviews/:id/turn
- * Accepts { answer: string } — appends user's answer and returns nextQuestion (from stored questions or LLM)
- */
 router.post('/:id/turn', async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -475,58 +399,143 @@ router.post('/:id/turn', async (req, res) => {
 
     const _id = new ObjectId(interviewId);
     const interviewsCol = global.db.collection('interviews');
-
     const interview = await interviewsCol.findOne({ _id });
     if (!interview) return res.status(404).json({ message: 'Interview not found' });
     if (interview.status === 'completed') return res.status(400).json({ message: 'Interview already completed' });
 
-    const userMessage = { role: 'user', content: answer };
-    const updatedContext = Array.isArray(interview.context) ? [...interview.context, userMessage] : [userMessage];
+    const lc = answer.trim().toLowerCase();
 
-    // If pre-generated questions exist, consume deterministically
-    if (Array.isArray(interview.questions) && interview.questions.length > 0) {
-      const idx = typeof interview.currentQuestionIndex === 'number' ? interview.currentQuestionIndex : 0;
-      const nextIndex = idx + 1;
+    const isSkip = answer === '__skip__';
+    const clarificationTriggers = [
+      'what', 'could you', 'can you', 'please repeat', 'again', 'i didn\'t', 'clarify', 'explain', 'repeat', 'say again', 'did you mean', '?'
+    ];
+    const isClarification = !isSkip && (lc.endsWith('?') || clarificationTriggers.some(t => lc.startsWith(t) || lc.includes(t)));
 
-      if (nextIndex < interview.questions.length) {
-        const nextQuestion = interview.questions[nextIndex];
-        updatedContext.push({ role: 'assistant', content: nextQuestion });
+    const context = Array.isArray(interview.context) ? [...interview.context] : [];
 
-        await interviewsCol.updateOne({ _id }, {
-          $set: { context: updatedContext, currentQuestionIndex: nextIndex, updatedAt: new Date() }
-        });
+    async function persistContext(newContext, extra = {}) {
+      await interviewsCol.updateOne({ _id }, { $set: { context: newContext, updatedAt: new Date(), ...extra }});
+    }
 
-        return res.json({ nextQuestion, done: false });
+    if (isSkip) {
+      context.push({ role: 'user', content: answer });
+
+      if (Array.isArray(interview.questions) && interview.questions.length > 0) {
+        const idx = typeof interview.currentQuestionIndex === 'number' ? interview.currentQuestionIndex : 0;
+        const nextIndex = idx + 1;
+        if (nextIndex < interview.questions.length) {
+          const nextQuestion = interview.questions[nextIndex];
+          context.push({ role: 'assistant', content: nextQuestion });
+          await persistContext(context, { currentQuestionIndex: nextIndex });
+          return res.json({ nextQuestion, followUp: null, done: false });
+        } else {
+          await persistContext(context, { currentQuestionIndex: interview.questions.length - 1, status: 'questions_completed' });
+          return res.json({ nextQuestion: null, followUp: null, done: true });
+        }
       } else {
-        // reached last question -> mark questions_completed (client can call /complete)
-        await interviewsCol.updateOne({ _id }, {
-          $set: { context: updatedContext, currentQuestionIndex: interview.questions.length - 1, status: 'questions_completed', updatedAt: new Date() }
-        });
-
-        return res.json({ nextQuestion: null, done: true });
+        const assistantReply = await callGroq(context);
+        context.push({ role: 'assistant', content: assistantReply });
+        await persistContext(context);
+        const done = /conclud|that concludes|end of interview/i.test(assistantReply);
+        return res.json({ nextQuestion: assistantReply, followUp: null, done });
       }
     }
 
-    // Fallback: call LLM with chat context to generate assistant reply
-    const assistantReply = await callGroq(updatedContext);
-    updatedContext.push({ role: 'assistant', content: assistantReply });
+    if (isClarification) {
+      context.push({ role: 'user', content: answer });
+      const clarifierSystem = (interview.context && interview.context[0] && interview.context[0].content) ?
+        interview.context[0].content : `You are an expert technical interviewer. Respond briefly and helpfully.`;
+      const messages = [
+        { role: 'system', content: clarifierSystem },
+        { role: 'user', content: `Candidate asked: "${answer}". Reply succinctly as the interviewer — answer the clarification or restate the question. Keep it short (1-2 sentences). Do NOT advance to the next interview question.` }
+      ];
+      const assistantReply = await callGroq(messages);
+      context.push({ role: 'assistant', content: assistantReply });
 
-    await interviewsCol.updateOne({ _id }, { $set: { context: updatedContext, updatedAt: new Date() } });
+      await persistContext(context);
+      return res.json({ nextQuestion: null, followUp: assistantReply, done: false });
+    }
 
-    const done = /conclud|that concludes|end of interview/i.test(assistantReply);
+    context.push({ role: 'user', content: answer });
+    const systemPrompt = (interview.context && interview.context[0] && interview.context[0].content)
+      ? interview.context[0].content
+      : `You are an expert technical interviewer for the role ${interview.position || ''}.`;
 
-    return res.json({ nextQuestion: assistantReply, done });
+    const decisionPrompt = `
+You are the interviewer. The candidate just answered the previous question. Decide whether you should:
+- ask a brief probing follow-up question (e.g., ask for clarification, complexity, edge-cases, or ask them to explain an assumption), OR
+- proceed to the next pre-generated question.
+
+Respond STRICTLY as JSON (no extra text) in one of the following shapes:
+
+1) Ask a follow-up:
+{ "action": "ask", "text": "<the follow-up question to ask the candidate (one sentence)>" }
+
+2) Proceed to the next pre-generated question:
+{ "action": "proceed" }
+
+3) End the interview:
+{ "action": "end" }
+
+Base your decision on the candidate's answer and whether a reasonable follow-up would probe technical depth. If you choose to ask a follow-up, keep it short (one sentence). Do NOT include any other keys.
+`;
+
+    const decisionMessages = [
+      { role: 'system', content: systemPrompt },
+      ...context.slice(-12) ,
+      { role: 'user', content: decisionPrompt }
+    ];
+
+    let decisionText = '';
+    try {
+      decisionText = await callGroq(decisionMessages);
+    } catch (e) {
+      console.warn('Decision LLM failed, falling back to proceed', e);
+    }
+
+    let decision = null;
+    try {
+      decision = extractJsonSubstring(decisionText);
+    } catch (e) { decision = null; }
+
+    if (decision && decision.action === 'ask' && decision.text) {
+      const followUp = decision.text.trim();
+      context.push({ role: 'assistant', content: followUp });
+      await persistContext(context);
+      return res.json({ nextQuestion: null, followUp, done: false });
+    }
+
+    if (decision && decision.action === 'end') {
+      await persistContext(context, { status: 'questions_completed' });
+      return res.json({ nextQuestion: null, followUp: null, done: true });
+    }
+
+    if (Array.isArray(interview.questions) && interview.questions.length > 0) {
+      const idx = typeof interview.currentQuestionIndex === 'number' ? interview.currentQuestionIndex : 0;
+      const nextIndex = idx + 1;
+      if (nextIndex < interview.questions.length) {
+        const nextQuestion = interview.questions[nextIndex];
+        context.push({ role: 'assistant', content: nextQuestion });
+        await persistContext(context, { currentQuestionIndex: nextIndex });
+        return res.json({ nextQuestion, followUp: null, done: false });
+      } else {
+        await persistContext(context, { currentQuestionIndex: interview.questions.length - 1, status: 'questions_completed' });
+        return res.json({ nextQuestion: null, followUp: null, done: true });
+      }
+    } else {
+      const assistantReply = await callGroq(context);
+      context.push({ role: 'assistant', content: assistantReply });
+      await persistContext(context);
+      const done = /conclud|that concludes|end of interview/i.test(assistantReply);
+      return res.json({ nextQuestion: assistantReply, followUp: null, done });
+    }
+
   } catch (err) {
     console.error('Error in /interviews/:id/turn:', err.response?.data || err.message || err);
     return res.status(500).json({ message: 'Failed to process turn' });
   }
 });
 
-/**
- * POST /interviews/:id/complete
- * Accepts transcript (file or field) and optional video file (GridFS).
- * Marks interview completed and stores transcript/video reference.
- */
 router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcript' }]), async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -538,7 +547,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
     const interview = await interviewsCol.findOne({ _id });
     if (!interview) return res.status(404).json({ message: 'Interview not found' });
 
-    // determine transcript text
     let transcriptText = '';
     if (req.files && req.files['transcript'] && req.files['transcript'][0]) {
       transcriptText = req.files['transcript'][0].buffer.toString('utf-8');
@@ -557,7 +565,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
       }
     };
 
-    // store video in GridFS if provided
     if (req.files && req.files['video'] && req.files['video'][0]) {
       const videoFile = req.files['video'][0];
       const bucket = new GridFSBucket(global.db, { bucketName: 'interview_videos' });
@@ -591,10 +598,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
   }
 });
 
-/**
- * GET /interviews/:id
- * Return full interview session (excluding large resumeText)
- */
 router.get('/:id', async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -611,10 +614,6 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-/**
- * POST /interviews/:id/analyze
- * Use robustParseAnalysis to extract structured JSON from LLM.
- */
 router.post('/:id/analyze', async (req, res) => {
   try {
     const interviewId = req.params.id;

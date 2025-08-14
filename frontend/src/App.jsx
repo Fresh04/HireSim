@@ -19,11 +19,11 @@ function PrivateRoute({ children }) {
 function Layout({ children }) {
   const { token } = useAuth();
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen bg-gray-900 text-gray-100">
       <Navbar />
-      <div className="flex">
+      <div className="flex flex-1">
         {token && <Sidebar />}
-        <main className="flex-1 p-6 bg-gray-100">{children}</main>
+        <main className="flex-1 w-full">{children}</main>
       </div>
     </div>
   );
