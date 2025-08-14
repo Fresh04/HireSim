@@ -26,15 +26,17 @@ export default function Login() {
       const res = await axios.post(`${import.meta.env.VITE_API_URL}/login`, { email, password });
       const token = res.data?.token;
       const user = res.data?.user || null;
+      // console.log(res.data);
 
       if (!token) {
         throw new Error('No token returned from server');
       }
       localStorage.setItem('token', token);
-      if (user && user.name) localStorage.setItem('username', user.name);
+      // console.log(user);
+      if (user && user.username) localStorage.setItem('username', user.username);
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       if (auth?.login) {
-        try { auth.login(token, user); } catch (e) { /* ignore */ }
+        try { auth.login(token, user); } catch (e) { }
       }
 
       navigate('/dashboard');

@@ -27,7 +27,6 @@ export default function Register() {
     try {
       const payload = { name, email, password };
       const res = await axios.post(`${import.meta.env.VITE_API_URL}/register`, payload);
-      // expected shape: { token, user? }
       const token = res.data?.token;
       const user = res.data?.user || { name };
 
@@ -36,7 +35,7 @@ export default function Register() {
       }
 
       localStorage.setItem('token', token);
-      if (user && user.name) localStorage.setItem('username', user.name);
+      if (user && user.name) localStorage.setItem('username', user.username);
 
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 

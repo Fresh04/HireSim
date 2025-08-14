@@ -41,6 +41,7 @@ export default function Sidebar() {
 
   return (
     <>
+      {/* Desktop / large: vertical sticky sidebar */}
       <aside className="hidden lg:block lg:w-64 lg:sticky lg:top-0 lg:h-screen lg:overflow-y-auto lg:pt-6 bg-gray-800 border-r border-gray-700 scrollbar-dark" aria-label="Sidebar">
         <div className="px-4 pb-6">
           <Link

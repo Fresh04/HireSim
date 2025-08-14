@@ -1,8 +1,6 @@
-// src/context/AuthContext.jsx
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import axios from 'axios';
 
-// small helper to parse JWT payload (no deps)
 function parseJwt(token) {
   try {
     const parts = token.split('.');
@@ -37,7 +35,10 @@ export function AuthProvider({ children }) {
   }, [token]);
 
   const login = (newToken) => setToken(newToken);
-  const logout = () => setToken(null);
+  const logout = () => {
+  localStorage.clear();
+  setToken(null);
+};
 
   return (
     <AuthContext.Provider value={{ token, user, login, logout, ready }}>
