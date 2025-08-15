@@ -1,4 +1,3 @@
-// routes/interviews.js
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -12,11 +11,6 @@ const upload = multer({
   limits: { fileSize: 200 * 1024 * 1024 }
 });
 
-/**
- * Helper: build system prompt which will be included with conversational calls
- * NOTE: we explicitly instruct the model to avoid asking for drawings, images,
- * or large runnable code blocks — only short pseudocode allowed.
- */
 function buildSystemPrompt({ company, position, description, requirements, resumeText, numQuestions, difficulty, mode }) {
   return `
 You are an expert technical interviewer for the role of ${position || 'the role'} at ${company || 'the company'}.
@@ -36,23 +30,19 @@ When appropriate, provide small clarifications, probing follow-ups, or the next 
 `.trim();
 }
 
-/* ---------- Utility functions for parsing LLM outputs ---------- */
 
 function extractJsonSubstring(text) {
   if (!text || typeof text !== 'string') return null;
-  // try fenced JSON
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
   if (fenced && fenced[1]) {
     try { return JSON.parse(fenced[1].trim()); } catch (e) {}
   }
-  // first {...} block
   const first = text.indexOf('{');
   const last = text.lastIndexOf('}');
   if (first >= 0 && last > first) {
     const cand = text.slice(first, last + 1);
     try { return JSON.parse(cand); } catch (e) {}
   }
-  // try to find balanced braces
   let stack = [];
   for (let i = 0; i < text.length; i++) {
     if (text[i] === '{') stack.push(i);
@@ -74,7 +64,6 @@ function tryRepairJson(candidate) {
   const first = s.indexOf('{');
   if (first > 0) s = s.slice(first);
   try { return JSON.parse(s); } catch (e) {}
-  // try trimming trailing chars
   for (let cut = 0; cut < 6; cut++) {
     try {
       const part = s.slice(0, s.length - cut);
@@ -102,7 +91,6 @@ function parseQuestionsFromText(text) {
   return items;
 }
 
-/* ---------- Groq / LLM call helper ---------- */
 
 async function callGroq(messages) {
   const url = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
@@ -130,12 +118,6 @@ async function callGroq(messages) {
   return assistantText;
 }
 
-/* ---------- Routes ---------- */
-
-/**
- * GET /interviews
- * list user's interviews
- */
 router.get('/', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -151,15 +133,10 @@ router.get('/', async (req, res) => {
   }
 });
 
-/**
- * POST /interviews
- * create interview — generate fallback questions (JSON) but the UI will operate conversationally
- */
 router.post('/', upload.single('resume'), async (req, res) => {
   try {
     const { company, position, description, requirements, numQuestions, difficulty, mode } = req.body;
 
-    // parse resume (in-memory) and discard buffer
     let resumeText = '';
     if (req.file && req.file.mimetype === 'application/pdf') {
       try {
@@ -172,7 +149,6 @@ router.post('/', upload.single('resume'), async (req, res) => {
 
     const systemPrompt = buildSystemPrompt({ company, position, description, requirements, resumeText, numQuestions, difficulty, mode });
 
-    // ask model to output a small fallback question list in strict JSON
     const qPrompt = `
 You are an expert interviewer generating interview questions for the role ${position || ''} at ${company || ''}.
 You have to ask ${numQuestions || 5} ${difficulty || 'medium'}-difficulty technical interview questions tailored to this role and the job description below.
@@ -228,10 +204,8 @@ Get started with the interview now.
       difficulty,
       mode,
       resumeText,
-      // store fallback question list (frontend doesn't have to use this as canonical)
       questions,
       currentQuestionIndex: 0,
-      // initial conversational context: system + first assistant message
       context: [
         { role: 'system', content: systemPrompt },
         { role: 'assistant', content: firstQuestion }
@@ -242,7 +216,6 @@ Get started with the interview now.
     };
 
     const result = await global.db.collection('interviews').insertOne(doc);
-    // return assistant text and interviewId; include interview doc lightly
     return res.json({ interviewId: result.insertedId, assistant: firstQuestion });
   } catch (err) {
     console.error('Error creating interview:', err.response?.data || err.message || err);
@@ -264,7 +237,6 @@ router.post('/:id/turn', async (req, res) => {
     if (!interview) return res.status(404).json({ message: 'Interview not found' });
     if (interview.status === 'completed') return res.status(400).json({ message: 'Interview already completed' });
 
-    // convenience helpers
     const persistContext = async (newContext, extra = {}) => {
       await interviewsCol.updateOne({ _id }, { $set: { context: newContext, updatedAt: new Date(), ...extra }});
       return await interviewsCol.findOne({ _id }, { projection: { resumeText: 0 }});
@@ -279,19 +251,15 @@ router.post('/:id/turn', async (req, res) => {
     ];
     const isClarification = !isSkip && !isStart && (lc.endsWith('?') || clarificationTriggers.some(t => lc.startsWith(t) || lc.includes(t)));
 
-    // make a shallow copy of context
     const context = Array.isArray(interview.context) ? [...interview.context] : [];
 
-    // handle __start__: ask LLM to start interview (if no assistant or to refresh)
     if (isStart) {
-      // If we already have an assistant in context, return it
       const lastAssistant = (context.slice().reverse().find(c => c.role === 'assistant'));
       if (lastAssistant && lastAssistant.content) {
         const updated = await persistContext(context);
         return res.json({ assistant: lastAssistant.content, nextQuestion: lastAssistant.content, followUp: null, done: false, interview: updated });
       }
 
-      // otherwise ask LLM to begin
       const systemPrompt = (context && context[0] && context[0].content) ? context[0].content : `You are an expert technical interviewer.`;
       const startMsg = [
         { role: 'system', content: systemPrompt },
@@ -304,7 +272,6 @@ router.post('/:id/turn', async (req, res) => {
       return res.json({ assistant: assistantReply, nextQuestion: assistantReply, followUp: null, done: false, interview: updatedInterview });
     }
 
-    // handle skip: advance to next fallback question if available; otherwise ask LLM for next utterance
     if (isSkip) {
       context.push({ role: 'user', content: answer });
 
@@ -322,7 +289,6 @@ router.post('/:id/turn', async (req, res) => {
         }
       }
 
-      // fallback: ask model to produce next question/utterance
       const assistantReply = await callGroq(context);
       context.push({ role: 'assistant', content: assistantReply });
       const updatedInterview = await persistContext(context);
@@ -330,7 +296,6 @@ router.post('/:id/turn', async (req, res) => {
       return res.json({ assistant: assistantReply, nextQuestion: assistantReply, followUp: null, done, interview: updatedInterview });
     }
 
-    // clarifications: short reply, DO NOT advance
     if (isClarification) {
       context.push({ role: 'user', content: answer });
       const clarifierSystem = (context && context[0] && context[0].content) ? context[0].content : `You are an expert technical interviewer.`;
@@ -344,9 +309,6 @@ router.post('/:id/turn', async (req, res) => {
       return res.json({ assistant: assistantReply, nextQuestion: null, followUp: assistantReply, done: false, interview: updatedInterview });
     }
 
-    // Normal answer flow:
-    // 1) append user answer to context
-    // 2) ask decision LLM whether to ask follow-up / proceed / end
     context.push({ role: 'user', content: answer });
 
     const systemPrompt = (context && context[0] && context[0].content) ? context[0].content : `You are an expert technical interviewer for the role ${interview.position || ''}.`;
@@ -386,9 +348,7 @@ Base your decision on the candidate's answer and whether a technical probing/fol
     }
 
     let decision = extractJsonSubstring(decisionText) || tryRepairJson(decisionText);
-    // fallback heuristics if no JSON
     if (!decision) {
-      // naïve fallback: if answer length < 30 chars, ask follow-up; else proceed
       if (answer.trim().length < 30) decision = { action: 'ask', text: 'Could you expand on that a bit more — what was your thought process?' };
       else decision = { action: 'proceed' };
     }
@@ -405,7 +365,6 @@ Base your decision on the candidate's answer and whether a technical probing/fol
       return res.json({ assistant: null, nextQuestion: null, followUp: null, done: true, interview: updatedInterview });
     }
 
-    // decision.action === 'proceed' -> try to advance to next fallback question if available
     if (Array.isArray(interview.questions) && interview.questions.length > 0) {
       const idx = typeof interview.currentQuestionIndex === 'number' ? interview.currentQuestionIndex : -1;
       const nextIndex = idx + 1;
@@ -420,7 +379,6 @@ Base your decision on the candidate's answer and whether a technical probing/fol
       }
     }
 
-    // fallback: ask conversational LLM for the next utterance (follow-up or next question)
     const assistantReply = await callGroq(context);
     context.push({ role: 'assistant', content: assistantReply });
     const updatedInterview = await persistContext(context);
@@ -433,10 +391,6 @@ Base your decision on the candidate's answer and whether a technical probing/fol
   }
 });
 
-/**
- * POST /interviews/:id/complete
- * store transcript and optional video (GridFS) and mark completed
- */
 router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcript' }]), async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -448,7 +402,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
     const interview = await interviewsCol.findOne({ _id });
     if (!interview) return res.status(404).json({ message: 'Interview not found' });
 
-    // collect transcript
     let transcriptText = '';
     if (req.files && req.files['transcript'] && req.files['transcript'][0]) {
       transcriptText = req.files['transcript'][0].buffer.toString('utf-8');
@@ -467,7 +420,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
       }
     };
 
-    // store video to GridFS if present
     if (req.files && req.files['video'] && req.files['video'][0]) {
       const videoFile = req.files['video'][0];
       const bucket = new GridFSBucket(global.db, { bucketName: 'interview_videos' });
@@ -497,10 +449,7 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
   }
 });
 
-/**
- * GET /interviews/:id
- * return interview doc
- */
+
 router.get('/:id', async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -515,17 +464,10 @@ router.get('/:id', async (req, res) => {
   }
 });
 
-/**
- * POST /interviews/:id/analyze
- * build analysis prompt, call LLM, robustly parse JSON (tries multiple strategies),
- * store analysis and analysisRaw.
- */
 async function robustParseAnalysis(llmText, callFn) {
-  // try direct JSON
   const direct = extractJsonSubstring(llmText);
   if (direct) return { analysis: direct, raw: llmText };
 
-  // try to ask the LLM to reformat into the required JSON
   const formatter = `
 The previous output may contain commentary. Reformat the content into strict JSON ONLY matching this schema:
 
@@ -552,9 +494,8 @@ Return the JSON only.
     const resp = await callFn([{ role: 'system', content: 'You are a strict JSON formatter.' }, { role: 'user', content: formatter }]);
     const parsed = extractJsonSubstring(resp) || tryRepairJson(resp);
     if (parsed) return { analysis: parsed, raw: resp };
-  } catch (e) { /* ignore */ }
+  } catch (e) { }
 
-  // final fallback: produce a minimal structure
   return {
     analysis: {
       scores: { communication: null, technical: null, structure: null, confidence: null, nonverbal: null },

@@ -19,16 +19,13 @@ router.post('/', async (req, res) => {
 
     const usersCol = global.db.collection('users');
 
-    // check if user already exists
     const existing = await usersCol.findOne({ email: email.toLowerCase().trim() });
     if (existing) {
       return res.status(409).json({ message: 'User with that email already exists.' });
     }
 
-    // hash password
     const hashed = await bcrypt.hash(password, SALT_ROUNDS);
 
-    // create user doc
     const userDoc = {
       email: email.toLowerCase().trim(),
       password: hashed,
@@ -39,7 +36,6 @@ router.post('/', async (req, res) => {
 
     const result = await usersCol.insertOne(userDoc);
 
-    // sign JWT
     if (!process.env.JWT_SECRET) {
       console.error('Missing JWT_SECRET — cannot sign token.');
       return res.status(500).json({ message: 'Server misconfiguration (missing JWT secret).' });
@@ -48,7 +44,6 @@ router.post('/', async (req, res) => {
     const payload = { id: result.insertedId.toString(), email: userDoc.email };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: TOKEN_EXPIRY });
 
-    // return token + minimal user info
     return res.status(201).json({
       message: 'Registration successful',
       token,
