@@ -1,4 +1,3 @@
-// routes/interviews.js
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -8,7 +7,7 @@ const { ObjectId } = require('mongodb');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024 } // keep a generous limit for resume/transcript
+  limits: { fileSize: 200 * 1024 * 1024 }
 });
 
 function buildSystemPrompt({ company, position, description, requirements, resumeText, numQuestions, difficulty, mode }) {
@@ -152,8 +151,10 @@ You are an expert interviewer generating interview questions for the role ${posi
 You have to ask ${numQuestions || 5} ${difficulty || 'medium'}-difficulty technical interview questions tailored to this role and the job description below.
 
 Constraints:
-- DO NOT request drawings, diagrams, or ask the candidate to write long runnable code.
+- DO NOT request drawings, diagrams, or ask the candidate to write runnable code.
 - If code is needed, ask for short pseudocode or a verbal explanation.
+- Begin like a normal interview asking introduction and few resume based questions. 
+- Don't include your own notes in the response. Respond like the interview is going on. 
 Return JSON only in exact format:
 { "questions": ["First question text", "Second question text", ...] }
 
@@ -390,14 +391,6 @@ Base your decision on the candidate's answer and whether a technical probing/fol
   }
 });
 
-/**
- * POST /interviews/:id/complete
- * Accepts:
- *  - multipart/form-data with field 'transcript' (file) OR
- *  - JSON/form field 'transcriptText' or 'transcript' with text body
- *
- * This endpoint NO LONGER accepts or stores video. It will just save transcript and mark interview completed.
- */
 router.post('/:id/complete', upload.single('transcript'), async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -409,7 +402,6 @@ router.post('/:id/complete', upload.single('transcript'), async (req, res) => {
     const interview = await interviewsCol.findOne({ _id });
     if (!interview) return res.status(404).json({ message: 'Interview not found' });
 
-    // Get transcript text (file or text field)
     let transcriptText = '';
     if (req.file && req.file.buffer) {
       transcriptText = req.file.buffer.toString('utf-8');
