@@ -1,14 +1,14 @@
+// routes/interviews.js
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
 const pdfParse = require('pdf-parse');
 const axios = require('axios');
-const { ObjectId, GridFSBucket } = require('mongodb');
-const { Readable } = require('stream');
+const { ObjectId } = require('mongodb');
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 200 * 1024 * 1024 }
+  limits: { fileSize: 200 * 1024 * 1024 } // keep a generous limit for resume/transcript
 });
 
 function buildSystemPrompt({ company, position, description, requirements, resumeText, numQuestions, difficulty, mode }) {
@@ -29,7 +29,6 @@ Important constraints for every assistant message:
 When appropriate, provide small clarifications, probing follow-ups, or the next question.
 `.trim();
 }
-
 
 function extractJsonSubstring(text) {
   if (!text || typeof text !== 'string') return null;
@@ -90,7 +89,6 @@ function parseQuestionsFromText(text) {
   if (cur) items.push(cur.trim());
   return items;
 }
-
 
 async function callGroq(messages) {
   const url = process.env.GROQ_API_URL || 'https://api.groq.com/openai/v1/chat/completions';
@@ -222,6 +220,7 @@ Get started with the interview now.
     return res.status(500).json({ message: 'Failed to create interview session' });
   }
 });
+
 router.post('/:id/turn', async (req, res) => {
   try {
     const interviewId = req.params.id;
@@ -382,16 +381,24 @@ Base your decision on the candidate's answer and whether a technical probing/fol
     const assistantReply = await callGroq(context);
     context.push({ role: 'assistant', content: assistantReply });
     const updatedInterview = await persistContext(context);
-    const done = /conclud|that concludes|end of interview/i.test(assistantReply);
-    return res.json({ assistant: assistantReply, nextQuestion: assistantReply, followUp: null, done, interview: updatedInterview });
+    const finished = /conclud|that concludes|end of interview/i.test(assistantReply);
+    return res.json({ assistant: assistantReply, nextQuestion: assistantReply, followUp: null, done: finished, interview: updatedInterview });
 
   } catch (err) {
-    console.error('Error in POST /interviews/:id/turn:', err.response?.data || err.message || err);
+    console.error('Error in /interviews/:id/turn:', err.response?.data || err.message || err);
     return res.status(500).json({ message: 'Failed to process turn' });
   }
 });
 
-router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcript' }]), async (req, res) => {
+/**
+ * POST /interviews/:id/complete
+ * Accepts:
+ *  - multipart/form-data with field 'transcript' (file) OR
+ *  - JSON/form field 'transcriptText' or 'transcript' with text body
+ *
+ * This endpoint NO LONGER accepts or stores video. It will just save transcript and mark interview completed.
+ */
+router.post('/:id/complete', upload.single('transcript'), async (req, res) => {
   try {
     const interviewId = req.params.id;
     if (!ObjectId.isValid(interviewId)) return res.status(400).json({ message: 'Invalid interview id' });
@@ -402,9 +409,10 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
     const interview = await interviewsCol.findOne({ _id });
     if (!interview) return res.status(404).json({ message: 'Interview not found' });
 
+    // Get transcript text (file or text field)
     let transcriptText = '';
-    if (req.files && req.files['transcript'] && req.files['transcript'][0]) {
-      transcriptText = req.files['transcript'][0].buffer.toString('utf-8');
+    if (req.file && req.file.buffer) {
+      transcriptText = req.file.buffer.toString('utf-8');
     } else if (req.body && req.body.transcriptText) {
       transcriptText = req.body.transcriptText;
     } else if (req.body && req.body.transcript) {
@@ -420,26 +428,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
       }
     };
 
-    if (req.files && req.files['video'] && req.files['video'][0]) {
-      const videoFile = req.files['video'][0];
-      const bucket = new GridFSBucket(global.db, { bucketName: 'interview_videos' });
-      const filename = `interview_${interviewId}_${Date.now()}.${videoFile.mimetype === 'video/webm' ? 'webm' : 'bin'}`;
-
-      const uploadStream = bucket.openUploadStream(filename, {
-        contentType: videoFile.mimetype,
-        metadata: { interviewId, uploadedBy: req.user?.id || null }
-      });
-
-      const readable = Readable.from(videoFile.buffer);
-      await new Promise((resolve, reject) => {
-        readable.pipe(uploadStream).on('error', reject).on('finish', () => {
-          updateDoc.$set.videoFileId = uploadStream.id;
-          updateDoc.$set.videoFileName = filename;
-          resolve();
-        });
-      });
-    }
-
     await interviewsCol.updateOne({ _id }, updateDoc);
     const updatedInterview = await interviewsCol.findOne({ _id }, { projection: { resumeText: 0 }});
     return res.json({ message: 'Interview completed', interviewId, interview: updatedInterview });
@@ -448,7 +436,6 @@ router.post('/:id/complete', upload.fields([{ name: 'video' }, { name: 'transcri
     return res.status(500).json({ message: 'Failed to complete interview' });
   }
 });
-
 
 router.get('/:id', async (req, res) => {
   try {

@@ -13,7 +13,6 @@ export default function Interview() {
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [history, setHistory] = useState([]); // { role:'assistant'|'user', text }
   const [statusMsg, setStatusMsg] = useState('');
-  const [isRecording, setIsRecording] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -23,8 +22,6 @@ export default function Interview() {
 
   const videoRef = useRef(null);
   const mediaStreamRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const recordedChunksRef = useRef([]);
   const recognitionRef = useRef(null);
 
   const supportsSTT = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -156,10 +153,11 @@ export default function Interview() {
     speechSynthesis.speak(u);
   };
 
-  // media helpers
+  // media helpers (camera + mic preview only, no recording)
   async function ensureMediaStream() {
     if (mediaStreamRef.current) return mediaStreamRef.current;
     try {
+      // request both video + audio so user sees webcam and mic permission together
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       mediaStreamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
@@ -170,32 +168,16 @@ export default function Interview() {
     }
   }
 
-  async function startRecording() {
-    try {
-      const stream = await ensureMediaStream();
-      recordedChunksRef.current = [];
-      let options = { mimeType: 'video/webm; codecs=vp9,opus' };
-      if (!MediaRecorder.isTypeSupported(options.mimeType)) {
-        options = { mimeType: 'video/webm; codecs=vp8,opus' };
-        if (!MediaRecorder.isTypeSupported(options.mimeType)) options = { mimeType: 'video/webm' };
+  function stopMediaStream() {
+    if (mediaStreamRef.current) {
+      try {
+        mediaStreamRef.current.getTracks().forEach(t => t.stop());
+      } catch (e) { /* ignore */ }
+      if (videoRef.current) {
+        try { videoRef.current.srcObject = null; } catch (e) {}
       }
-      const mr = new MediaRecorder(stream, options);
-      mr.ondataavailable = (e) => { if (e.data && e.data.size) recordedChunksRef.current.push(e.data); };
-      mr.onstop = () => setStatusMsg('Recording stopped');
-      mr.start(1000);
-      mediaRecorderRef.current = mr;
-      setIsRecording(true);
-      setStatusMsg('Recording...');
-    } catch (err) {
-      console.error('startRecording error', err);
-      setStatusMsg(err.message || 'Could not start recording');
+      mediaStreamRef.current = null;
     }
-  }
-
-  function stopRecording() {
-    const mr = mediaRecorderRef.current;
-    if (mr && mr.state !== 'inactive') mr.stop();
-    setIsRecording(false);
   }
 
   const startListening = () => {
@@ -222,11 +204,18 @@ export default function Interview() {
   // Toggle interview: start/stop. On start we ask backend to START if necessary
   const handleToggleInterview = async () => {
     if (!isInterviewRunning) {
-      // Start interview: start camera/mic/recorder and request first live question if needed
-      try { await startRecording(); } catch (e) { /* status changed in helper */ }
+      // Start interview: open camera preview (no recording) and start STT if available
+      try {
+        await ensureMediaStream();
+      } catch (e) {
+        // permission denied or failed — still allow interview via typed answers
+        console.warn('Camera preview unavailable', e);
+      }
+
       if (supportsSTT) {
         try { startListening(); } catch (e) {}
       }
+
       setIsInterviewRunning(true);
       setStatusMsg('Interview running');
 
@@ -266,9 +255,9 @@ export default function Interview() {
         speak(currentQuestion, () => setStatusMsg('Waiting for your response...'));
       }
     } else {
-      // Stop interview: stop recording + mic
-      if (isRecording) stopRecording();
+      // Stop interview: stop listening and camera preview
       if (isListening) stopListening();
+      stopMediaStream();
       setIsInterviewRunning(false);
       setStatusMsg('Interview stopped');
     }
@@ -323,9 +312,8 @@ export default function Interview() {
       if (finished) {
         setDone(true);
         setStatusMsg('Interviewer indicated the interview is complete. Click End & Upload to finish.');
-        // stop recording + listening but keep media for preview/upload
         if (isListening) stopListening();
-        if (isRecording) stopRecording();
+        stopMediaStream();
         setIsInterviewRunning(false);
       }
     } catch (err) {
@@ -374,7 +362,7 @@ export default function Interview() {
         setDone(true);
         setStatusMsg('Interviewer indicated the interview is complete.');
         if (isListening) stopListening();
-        if (isRecording) stopRecording();
+        stopMediaStream();
         setIsInterviewRunning(false);
       }
     } catch (err) {
@@ -391,18 +379,16 @@ export default function Interview() {
     });
   };
 
-  // Finalize interview and upload transcript + video
+  // Finalize interview and upload transcript (no video)
   const finalizeInterview = async (replaceNav = false) => {
-    setStatusMsg('Finalizing interview — uploading media...');
-    if (isRecording) stopRecording();
+    setStatusMsg('Finalizing interview — uploading transcript...');
     if (isListening) stopListening();
+    stopMediaStream();
     setIsInterviewRunning(false);
 
     const transcriptText = history.map(h => `${h.role === 'assistant' ? 'Interviewer' : 'You'}: ${h.text}`).join('\n\n');
-    const videoBlob = recordedChunksRef.current.length ? new Blob(recordedChunksRef.current, { type: 'video/webm' }) : null;
     const form = new FormData();
     form.append('transcript', new Blob([transcriptText], { type: 'text/plain' }), 'transcript.txt');
-    if (videoBlob) form.append('video', videoBlob, 'interview.webm');
 
     try {
       const token = localStorage.getItem('token');
@@ -421,6 +407,20 @@ export default function Interview() {
         navigate('/login');
       }
     }
+  };
+
+  // Download transcript locally
+  const downloadTranscript = () => {
+    const transcriptText = history.map(h => `${h.role === 'assistant' ? 'Interviewer' : 'You'}: ${h.text}`).join('\n\n');
+    const blob = new Blob([transcriptText], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `transcript_${interviewId || 'session'}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   };
 
   // Apply interim transcript into staged answer
@@ -442,12 +442,10 @@ export default function Interview() {
   // cleanup
   useEffect(() => {
     return () => {
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach(t => t.stop());
-        mediaStreamRef.current = null;
-      }
+      stopMediaStream();
       try { recognitionRef.current?.stop(); } catch {}
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // keyboard shortcuts (global) — ignore when typing
@@ -508,11 +506,6 @@ export default function Interview() {
             <button onClick={handleSkip} className="bg-yellow-600 hover:bg-yellow-700 text-white px-3 py-2 rounded-lg transition">Skip</button>
 
             <div className="ml-auto flex items-center gap-2">
-              <button onClick={() => { if (isRecording) stopRecording(); else startRecording(); }}
-                className={`px-3 py-2 rounded-lg transition ${isRecording ? 'bg-red-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
-                {isRecording ? 'Stop Recording' : 'Record'}
-              </button>
-
               <button onClick={() => { if (isListening) stopListening(); else startListening(); }}
                 className={`px-3 py-2 rounded-lg transition ${isListening ? 'bg-green-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`}>
                 {isListening ? 'Stop Mic' : 'Start Mic'}
@@ -567,14 +560,7 @@ export default function Interview() {
           <video ref={videoRef} autoPlay muted playsInline className="w-full rounded-lg bg-black" style={{ aspectRatio: '3/4', objectFit: 'cover' }} />
 
           <div className="w-full mt-3 flex gap-2">
-            <button onClick={() => {
-              if (recordedChunksRef.current.length) {
-                const url = URL.createObjectURL(new Blob(recordedChunksRef.current));
-                window.open(url, '_blank');
-              } else {
-                setStatusMsg('No recording yet');
-              }
-            }} className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition">Preview Recording</button>
+            <button onClick={downloadTranscript} className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition">Download Transcript</button>
 
             <button onClick={() => finalizeInterview(true)} className="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition">End & Upload</button>
           </div>
@@ -582,7 +568,10 @@ export default function Interview() {
           <div className="mt-4 w-full text-sm text-gray-400">
             <div><strong className="text-gray-300">Status:</strong> {statusMsg}</div>
             <div className="mt-2">
-              <strong className="text-gray-300">Mic:</strong> {isListening ? 'On' : 'Off'} • <strong className="text-gray-300"> Recording:</strong> {isRecording ? 'On' : 'Off'}
+              <strong className="text-gray-300">Mic:</strong> {isListening ? 'On' : 'Off'}
+            </div>
+            <div className="mt-2 text-xs text-gray-400">
+              Camera is used only as a live preview and is not recorded or uploaded.
             </div>
             {done && <div className="mt-2 text-yellow-300">Interviewer indicated the interview is complete.</div>}
           </div>
