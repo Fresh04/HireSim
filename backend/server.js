@@ -20,8 +20,6 @@ app.use('/register', registerRoute);
 app.use('/changepassword', changePasswordRoute);
 app.use('/interviews', auth, interviewsRoute);
 
-global.db;
-
 async function connectMongoDB() {
   try {
     const uri = process.env.MONGODB_URI;
@@ -31,15 +29,15 @@ async function connectMongoDB() {
     const db = client.db('HireSim');
     global.db = db;
     console.log('Connected to database:', 'HireSim');
+
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
   } catch (err) {
     console.error('Database connection failed:', err);
     process.exit(1);
   }
 }
-
-app.listen(PORT, '0.0.0.0', async () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  await connectMongoDB();
-});
+connectMongoDB();
 
 module.exports = app;
